@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ARIA</string>
+    <string name="accessibility_service_description">Lets ARIA read screen content and tap buttons on your behalf (e.g. tapping Send in WhatsApp) so it can carry out voice commands across other apps.</string>
+</resources>

@@ -1,0 +1,2 @@
+rootProject.name = "ARIA"
+include ':app'
