@@ -49,15 +49,29 @@ object DeviceActions {
             val obj = JSONObject(json)
             val nameLower = name.lowercase().trim()
 
+            // 1. Exact match wins immediately - no ambiguity.
             if (obj.has(nameLower)) return obj.getString(nameLower)
 
+            val allKeys = mutableListOf<String>()
             val keys = obj.keys()
-            while (keys.hasNext()) {
-                val key = keys.next()
-                if (key.lowercase().contains(nameLower) || nameLower.contains(key.lowercase())) {
-                    return obj.getString(key)
-                }
-            }
+            while (keys.hasNext()) allKeys.add(keys.next())
+
+            // 2. Key STARTS WITH the spoken name (e.g. "waqas" -> "waqas bhijaan" before "waqas2")
+            //    Sort shortest-first so "waqas" prefers "waqas" over "waqas bhijaan" if both start-match.
+            val startsWithMatches = allKeys.filter { it.lowercase().startsWith(nameLower) }
+                .sortedBy { it.length }
+            if (startsWithMatches.isNotEmpty()) return obj.getString(startsWithMatches.first())
+
+            // 3. Spoken name STARTS WITH a saved key (e.g. user says "waqas bhai" -> matches "waqas")
+            val reverseMatches = allKeys.filter { nameLower.startsWith(it.lowercase()) }
+                .sortedByDescending { it.length }
+            if (reverseMatches.isNotEmpty()) return obj.getString(reverseMatches.first())
+
+            // 4. Last resort: loose contains-match, shortest key first for predictability.
+            val looseMatches = allKeys.filter { it.lowercase().contains(nameLower) || nameLower.contains(it.lowercase()) }
+                .sortedBy { it.length }
+            if (looseMatches.isNotEmpty()) return obj.getString(looseMatches.first())
+
             null
         } catch (e: Exception) {
             null
@@ -71,11 +85,23 @@ object DeviceActions {
      */
     fun sendWhatsAppMessage(context: Context, phone: String, message: String) {
         val cleanPhone = phone.replace(Regex("[^0-9]"), "")
-        val uri = Uri.parse("https://wa.me/$cleanPhone?text=${Uri.encode(message)}")
+        val uri = Uri.parse("https://api.whatsapp.com/send?phone=$cleanPhone&text=${Uri.encode(message)}")
+
+        // Force WhatsApp directly (setPackage) instead of letting it resolve to a browser
+        // wa.me landing page first - this opens straight into the chat with text pre-filled.
         val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+            setPackage("com.whatsapp")
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
-        context.startActivity(intent)
+        try {
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            // WhatsApp not installed under that package name (e.g. Business) - fall back to generic.
+            val fallback = Intent(Intent.ACTION_VIEW, uri).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(fallback)
+        }
         AriaAccessibilityService.requestAutoSend()
     }
 

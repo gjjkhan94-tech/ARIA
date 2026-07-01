@@ -24,10 +24,14 @@ class AriaAccessibilityService : AccessibilityService() {
                 Log.w(TAG, "Accessibility service not enabled — message stays pre-filled, user must tap Send manually.")
                 return
             }
-            // Give WhatsApp's UI a moment to render before we search for the Send button.
-            Handler(Looper.getMainLooper()).postDelayed({ svc.tryClickSend() }, 1200)
+            svc.pendingAutoSend = true
+            // Also try a plain retry loop as a backup in case the WINDOW_STATE_CHANGED
+            // event fires before WhatsApp's Send button actually exists in the tree yet.
+            svc.retryClickSend(attemptsLeft = 8)
         }
     }
+
+    private var pendingAutoSend = false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -41,14 +45,31 @@ class AriaAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Reserved for future features (reading notifications, screen state, etc.)
+        if (pendingAutoSend && event?.packageName == "com.whatsapp") {
+            // WhatsApp's window just changed (chat opened, keyboard shown, etc.) - try now.
+            Handler(Looper.getMainLooper()).postDelayed({ tryClickSend() }, 400)
+        }
     }
 
     override fun onInterrupt() {}
 
-    /** Looks for WhatsApp's Send button by common resource ids / descriptions and taps it. */
-    private fun tryClickSend() {
-        val root = rootInActiveWindow ?: return
+    /** Retries a handful of times with a delay, since WhatsApp's UI can take a moment to fully load. */
+    private fun retryClickSend(attemptsLeft: Int) {
+        if (attemptsLeft <= 0 || !pendingAutoSend) return
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (pendingAutoSend && tryClickSend()) {
+                // success, stop retrying
+            } else {
+                retryClickSend(attemptsLeft - 1)
+            }
+        }, 500)
+    }
+
+    /** Looks for WhatsApp's Send button by common resource ids / descriptions and taps it. Returns true if clicked. */
+    private fun tryClickSend(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        if (root.packageName != "com.whatsapp") return false
+
         val candidateIds = listOf(
             "com.whatsapp:id/send",
             "com.whatsapp:id/fab"
@@ -57,12 +78,18 @@ class AriaAccessibilityService : AccessibilityService() {
             val nodes = root.findAccessibilityNodeInfosByViewId(id)
             if (nodes.isNotEmpty()) {
                 clickNode(nodes[0])
-                return
+                pendingAutoSend = false
+                return true
             }
         }
         // Fallback: search by content description containing "Send"
         val node = findNodeByDescription(root, "send")
-        node?.let { clickNode(it) }
+        if (node != null) {
+            clickNode(node)
+            pendingAutoSend = false
+            return true
+        }
+        return false
     }
 
     private fun findNodeByDescription(node: AccessibilityNodeInfo, text: String): AccessibilityNodeInfo? {
