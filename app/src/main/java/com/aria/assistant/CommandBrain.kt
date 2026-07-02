@@ -73,8 +73,12 @@ Always reply in the same language as the user's message. Never return an empty r
 
             val responseCode = conn.responseCode
             if (responseCode != 200) {
-                Log.e(TAG, "Gemini API error code $responseCode")
-                return localFallback(userInput, "AI is unreachable right now.")
+                val errorBody = try {
+                    conn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                } catch (e: Exception) { "" }
+                Log.e(TAG, "Gemini API error code $responseCode: $errorBody")
+                val shortReason = errorBody.take(150).replace("\n", " ")
+                return localFallback(userInput, "AI error ($responseCode): $shortReason")
             }
 
             val raw = conn.inputStream.bufferedReader().use { it.readText() }
@@ -99,7 +103,7 @@ Always reply in the same language as the user's message. Never return an empty r
             )
         } catch (e: Exception) {
             Log.e(TAG, "processWithAI failed", e)
-            localFallback(userInput, "Something went wrong reaching the AI, but here's what I could do offline:")
+            localFallback(userInput, "Network error: ${e.javaClass.simpleName} - ${e.message}. Offline mode:")
         }
     }
 

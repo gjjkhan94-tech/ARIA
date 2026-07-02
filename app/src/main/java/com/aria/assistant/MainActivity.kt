@@ -1,13 +1,18 @@
 package com.aria.assistant
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.speech.RecognizerIntent
 import android.speech.tts.TextToSpeech
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -48,21 +53,34 @@ class MainActivity : AppCompatActivity() {
         }
 
         requestNeededPermissions()
+        requestBatteryOptimizationExemption()
+
+        // Restore whatever the last known service state was (helps after app updates/reinstalls too)
+        binding.statusText.text = if (ServicePrefs.wasRunning(this)) "Status: Running" else "Status: Stopped"
 
         binding.btnStartService.setOnClickListener {
             startForegroundService(Intent(this, AssistantForegroundService::class.java))
+            ServicePrefs.setRunning(this, true)
             binding.statusText.text = "Status: Running"
             log("ARIA service started")
         }
 
         binding.btnStopService.setOnClickListener {
             stopService(Intent(this, AssistantForegroundService::class.java))
+            ServicePrefs.setRunning(this, false)
             binding.statusText.text = "Status: Stopped"
             log("ARIA service stopped")
         }
 
         binding.btnEnableAccessibility.setOnClickListener {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+
+        binding.btnCopyLog.setOnClickListener {
+            val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = ClipData.newPlainText("ARIA log", binding.logText.text.toString())
+            clipboard.setPrimaryClip(clip)
+            Toast.makeText(this, "Log copied — paste it anywhere", Toast.LENGTH_SHORT).show()
         }
 
         binding.btnSend.setOnClickListener {
@@ -90,6 +108,22 @@ class MainActivity : AppCompatActivity() {
         }
         if (missing.isNotEmpty()) {
             permissionLauncher.launch(missing.toTypedArray())
+        }
+    }
+
+    /** Asks the user to whitelist ARIA from battery optimization - critical on Infinix/Transsion
+     *  devices which aggressively kill background apps otherwise. */
+    private fun requestBatteryOptimizationExemption() {
+        val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+        if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+            try {
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+                startActivity(intent)
+            } catch (e: Exception) {
+                log("Couldn't open battery settings automatically: ${e.message}")
+            }
         }
     }
 
