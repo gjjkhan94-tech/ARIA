@@ -106,6 +106,11 @@ object DeviceActions {
         }.sortedBy { it.length }
         if (wholeWordMatches.isNotEmpty()) return contacts[wholeWordMatches.first()]
 
+        // 5. Fuzzy match - tolerates small typos/mishears (e.g. "Ahmad" vs "Ahmed").
+        //    Last resort, and only against whole saved names (not word-by-word) to stay conservative.
+        val fuzzyMatches = safeKeys.filter { FuzzyMatch.isCloseMatch(it, nameLower) }.sortedBy { it.length }
+        if (fuzzyMatches.isNotEmpty()) return contacts[fuzzyMatches.first()]
+
         // No confident match - better to say "not found" than message the wrong person.
         return null
     }

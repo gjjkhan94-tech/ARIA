@@ -34,6 +34,7 @@ object ContactResolver {
 
         val exact = mutableListOf<Match>()
         val startsWith = mutableListOf<Match>()
+        val fuzzy = mutableListOf<Match>()
         val seenNumbers = mutableSetOf<String>()
 
         val cursor = context.contentResolver.query(
@@ -58,10 +59,13 @@ object ContactResolver {
                 when {
                     displayLower == nameLower -> exact.add(Match(displayName, cleanNumber))
                     displayLower.startsWith(nameLower) -> startsWith.add(Match(displayName, cleanNumber))
+                    displayLower.length >= 3 && FuzzyMatch.isCloseMatch(displayLower, nameLower) ->
+                        fuzzy.add(Match(displayName, cleanNumber))
                 }
             }
         }
 
-        return exact.ifEmpty { startsWith }
+        // Prefer exact, then prefix, then fuzzy - only reach fuzzy if nothing more confident exists.
+        return exact.ifEmpty { startsWith.ifEmpty { fuzzy } }
     }
 }

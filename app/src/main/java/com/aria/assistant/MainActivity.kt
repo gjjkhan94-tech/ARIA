@@ -148,6 +148,31 @@ class MainActivity : AppCompatActivity() {
     private fun handleCommand(text: String) {
         log("You: $text")
 
+        // If we're waiting on a yes/no confirmation before actually sending, handle that first.
+        val pendingConfirm = pendingConfirmSend
+        if (pendingConfirm != null) {
+            val reply = text.trim().lowercase()
+            when {
+                reply in listOf("yes", "y", "confirm", "send", "ok", "okay", "yeah", "yep") -> {
+                    pendingConfirmSend = null
+                    DeviceActions.sendWhatsAppMessage(this, pendingConfirm.phone, pendingConfirm.message)
+                    log("ARIA: Sending to ${pendingConfirm.displayName} (${pendingConfirm.phone})")
+                    speak("Sending now.")
+                    return
+                }
+                reply in listOf("no", "n", "cancel", "stop", "don't", "dont") -> {
+                    pendingConfirmSend = null
+                    log("ARIA: Cancelled.")
+                    speak("Okay, cancelled.")
+                    return
+                }
+                else -> {
+                    // Anything else - drop the pending confirmation and treat as a fresh command.
+                    pendingConfirmSend = null
+                }
+            }
+        }
+
         // If we're waiting on the user to pick between ambiguous contacts, handle
         // that locally first - don't waste an AI call on a bare "1"/"2" reply.
         val pendingMsg = pendingWhatsAppMessage
@@ -156,9 +181,7 @@ class MainActivity : AppCompatActivity() {
             if (choiceIndex != null && choiceIndex - 1 in lastAmbiguousMatches.indices) {
                 val chosen = lastAmbiguousMatches[choiceIndex - 1]
                 pendingWhatsAppMessage = null
-                DeviceActions.sendWhatsAppMessage(this, chosen.phoneNumber, pendingMsg)
-                log("ARIA: Sending to ${chosen.displayName} (${chosen.phoneNumber})")
-                speak("Sending to ${chosen.displayName}")
+                askToConfirmSend(chosen.displayName, chosen.phoneNumber, pendingMsg)
                 return
             } else {
                 // User said something else entirely - drop the pending state and continue normally.
@@ -206,12 +229,21 @@ class MainActivity : AppCompatActivity() {
     private var pendingWhatsAppMessage: String? = null
     private var lastAmbiguousMatches: List<ContactResolver.Match> = emptyList()
 
+    /** Pending WhatsApp send waiting on a yes/no confirmation from the user. */
+    private data class PendingSend(val displayName: String, val phone: String, val message: String)
+    private var pendingConfirmSend: PendingSend? = null
+
+    private fun askToConfirmSend(displayName: String, phone: String, message: String) {
+        pendingConfirmSend = PendingSend(displayName, phone, message)
+        log("ARIA: Send '$message' to $displayName ($phone)? Reply yes or no.")
+        speak("Send '$message' to $displayName? Say yes or no.")
+    }
+
     private fun handleWhatsAppRequest(contact: String, message: String) {
         // 1. User-added contacts (Manage Contacts screen) always win - most trustworthy source.
         val userAddedPhone = DeviceActions.getUserAddedNumber(this, contact)
         if (userAddedPhone != null) {
-            DeviceActions.sendWhatsAppMessage(this, userAddedPhone, message)
-            log("Sending to $contact (saved in Manage Contacts) - $userAddedPhone")
+            askToConfirmSend(contact, userAddedPhone, message)
             return
         }
 
@@ -220,8 +252,7 @@ class MainActivity : AppCompatActivity() {
         when {
             realMatches.size == 1 -> {
                 val match = realMatches[0]
-                DeviceActions.sendWhatsAppMessage(this, match.phoneNumber, message)
-                log("Sending to ${match.displayName} (${match.phoneNumber})")
+                askToConfirmSend(match.displayName, match.phoneNumber, message)
             }
             realMatches.size > 1 -> {
                 // Genuinely ambiguous - e.g. two contacts both named "Ali". Ask, don't guess.
@@ -237,11 +268,10 @@ class MainActivity : AppCompatActivity() {
                 // (useful for WhatsApp-only numbers that aren't saved as phone contacts).
                 val legacyPhone = DeviceActions.getPhoneNumber(this, contact)
                 if (legacyPhone != null) {
-                    DeviceActions.sendWhatsAppMessage(this, legacyPhone, message)
-                    log("Sending to $contact (from saved list) - $legacyPhone")
+                    askToConfirmSend(contact, legacyPhone, message)
                 } else {
                     log("No contact found for '$contact'")
-                    speak("I couldn't find a contact named $contact")
+                    speak("I couldn't find a contact named $contact. You can add them in Manage Contacts.")
                 }
             }
         }
