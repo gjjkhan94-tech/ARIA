@@ -54,6 +54,14 @@
         android:layout_marginBottom="8dp" />
 
     <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnManageContacts"
+        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Manage Contacts"
+        android:layout_marginBottom="8dp" />
+
+    <com.google.android.material.button.MaterialButton
         android:id="@+id/btnCopyLog"
         style="@style/Widget.MaterialComponents.Button.OutlinedButton"
         android:layout_width="match_parent"

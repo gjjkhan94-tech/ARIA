@@ -76,6 +76,10 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
 
+        binding.btnManageContacts.setOnClickListener {
+            startActivity(Intent(this, ContactsActivity::class.java))
+        }
+
         binding.btnCopyLog.setOnClickListener {
             val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
             val clip = ClipData.newPlainText("ARIA log", binding.logText.text.toString())
@@ -100,6 +104,7 @@ class MainActivity : AppCompatActivity() {
         val needed = mutableListOf<String>()
         needed.add(Manifest.permission.RECORD_AUDIO)
         needed.add(Manifest.permission.CAMERA)
+        needed.add(Manifest.permission.READ_CONTACTS)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             needed.add(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -142,6 +147,25 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleCommand(text: String) {
         log("You: $text")
+
+        // If we're waiting on the user to pick between ambiguous contacts, handle
+        // that locally first - don't waste an AI call on a bare "1"/"2" reply.
+        val pendingMsg = pendingWhatsAppMessage
+        if (pendingMsg != null) {
+            val choiceIndex = text.trim().toIntOrNull()
+            if (choiceIndex != null && choiceIndex - 1 in lastAmbiguousMatches.indices) {
+                val chosen = lastAmbiguousMatches[choiceIndex - 1]
+                pendingWhatsAppMessage = null
+                DeviceActions.sendWhatsAppMessage(this, chosen.phoneNumber, pendingMsg)
+                log("ARIA: Sending to ${chosen.displayName} (${chosen.phoneNumber})")
+                speak("Sending to ${chosen.displayName}")
+                return
+            } else {
+                // User said something else entirely - drop the pending state and continue normally.
+                pendingWhatsAppMessage = null
+            }
+        }
+
         thread {
             val result = CommandBrain.processWithAI(text)
             runOnUiThread {
@@ -168,19 +192,49 @@ class MainActivity : AppCompatActivity() {
             "whatsapp" -> {
                 val contact = result.extra.optString("whatsapp_contact")
                 val message = result.extra.optString("whatsapp_message")
-                val phone = DeviceActions.getPhoneNumber(this, contact)
-                if (phone != null) {
-                    DeviceActions.sendWhatsAppMessage(this, phone, message)
-                } else {
-                    log("No contact found for '$contact'")
-                    speak("I couldn't find a contact named $contact")
-                }
+                handleWhatsAppRequest(contact, message)
             }
             "open_app" -> {
                 val pkg = result.extra.optString("package_name")
                 if (pkg.isNotBlank()) DeviceActions.openApp(this, pkg)
             }
             else -> { /* chat — response already spoken above */ }
+        }
+    }
+
+    /** Pending WhatsApp send waiting on the user to pick which contact they meant. */
+    private var pendingWhatsAppMessage: String? = null
+    private var lastAmbiguousMatches: List<ContactResolver.Match> = emptyList()
+
+    private fun handleWhatsAppRequest(contact: String, message: String) {
+        val realMatches = ContactResolver.findContacts(this, contact)
+        when {
+            realMatches.size == 1 -> {
+                val match = realMatches[0]
+                DeviceActions.sendWhatsAppMessage(this, match.phoneNumber, message)
+                log("Sending to ${match.displayName} (${match.phoneNumber})")
+            }
+            realMatches.size > 1 -> {
+                // Genuinely ambiguous - e.g. two contacts both named "Ali". Ask, don't guess.
+                lastAmbiguousMatches = realMatches
+                pendingWhatsAppMessage = message
+                val options = realMatches.mapIndexed { i, m -> "${i + 1}) ${m.displayName} - ${m.phoneNumber}" }
+                    .joinToString("\n")
+                log("Multiple contacts named '$contact':\n$options\nReply with the number.")
+                speak("I found more than one contact named $contact. Check the screen and tell me which number.")
+            }
+            else -> {
+                // Not found in real contacts - try the legacy JSON list as a fallback
+                // (useful for WhatsApp-only numbers that aren't saved as phone contacts).
+                val legacyPhone = DeviceActions.getPhoneNumber(this, contact)
+                if (legacyPhone != null) {
+                    DeviceActions.sendWhatsAppMessage(this, legacyPhone, message)
+                    log("Sending to $contact (from saved list) - $legacyPhone")
+                } else {
+                    log("No contact found for '$contact'")
+                    speak("I couldn't find a contact named $contact")
+                }
+            }
         }
     }
 

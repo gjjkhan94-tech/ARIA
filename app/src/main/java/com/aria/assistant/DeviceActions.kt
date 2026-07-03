@@ -40,42 +40,68 @@ object DeviceActions {
     }
 
     /**
-     * Loads the contacts bundled in assets/contacts.json (same format as the old app).
-     * Returns the phone number for a name, or null if not found.
+     * Looks up a phone number by name. Checks user-added contacts (ContactsStore) first,
+     * falling back to the old bundled assets/contacts.json for anything not yet migrated.
+     * Returns null (rather than a wrong guess) when there's no confident match.
      */
     fun getPhoneNumber(context: Context, name: String): String? {
-        return try {
+        val merged = LinkedHashMap<String, String>()
+
+        // Old bundled file first (lower priority - loaded first so user contacts overwrite it below)
+        try {
             val json = context.assets.open("contacts.json").bufferedReader().use { it.readText() }
             val obj = JSONObject(json)
-            val nameLower = name.lowercase().trim()
-
-            // 1. Exact match wins immediately - no ambiguity.
-            if (obj.has(nameLower)) return obj.getString(nameLower)
-
-            val allKeys = mutableListOf<String>()
             val keys = obj.keys()
-            while (keys.hasNext()) allKeys.add(keys.next())
+            while (keys.hasNext()) {
+                val k = keys.next()
+                merged[k] = obj.getString(k)
+            }
+        } catch (e: Exception) { /* fine if missing */ }
 
-            // 2. Key STARTS WITH the spoken name (e.g. "waqas" -> "waqas bhijaan" before "waqas2")
-            //    Sort shortest-first so "waqas" prefers "waqas" over "waqas bhijaan" if both start-match.
-            val startsWithMatches = allKeys.filter { it.lowercase().startsWith(nameLower) }
-                .sortedBy { it.length }
-            if (startsWithMatches.isNotEmpty()) return obj.getString(startsWithMatches.first())
+        // User-added contacts always win on name collisions.
+        merged.putAll(ContactsStore.getAll(context))
 
-            // 3. Spoken name STARTS WITH a saved key (e.g. user says "waqas bhai" -> matches "waqas")
-            val reverseMatches = allKeys.filter { nameLower.startsWith(it.lowercase()) }
-                .sortedByDescending { it.length }
-            if (reverseMatches.isNotEmpty()) return obj.getString(reverseMatches.first())
+        return matchContact(merged, name)
+    }
 
-            // 4. Last resort: loose contains-match, shortest key first for predictability.
-            val looseMatches = allKeys.filter { it.lowercase().contains(nameLower) || nameLower.contains(it.lowercase()) }
-                .sortedBy { it.length }
-            if (looseMatches.isNotEmpty()) return obj.getString(looseMatches.first())
+    /** Pure matching logic, kept separate so it's easy to reason about / test. */
+    private fun matchContact(contacts: Map<String, String>, name: String): String? {
+        val nameLower = name.lowercase().trim()
+        if (nameLower.isBlank()) return null
 
-            null
-        } catch (e: Exception) {
-            null
-        }
+        // 1. Exact match - no ambiguity possible.
+        contacts[nameLower]?.let { return it }
+
+        // Ignore junk/short keys (like "a", "as") for anything but exact matches -
+        // these are almost always old typos or shortcuts that falsely match everything.
+        val MIN_KEY_LENGTH = 3
+        val safeKeys = contacts.keys.filter { it.length >= MIN_KEY_LENGTH }
+
+        // 2. A saved key starts with the spoken name (e.g. "waqas" -> "waqas bhijaan").
+        //    Shortest first, so "waqas" itself wins over "waqas bhijaan" when both match.
+        val startsWithMatches = safeKeys.filter { it.startsWith(nameLower) }.sortedBy { it.length }
+        if (startsWithMatches.isNotEmpty()) return contacts[startsWithMatches.first()]
+
+        // 3. The spoken name starts with a saved key (e.g. "waqas bhai" -> matches "waqas").
+        //    Longest key first (most specific), and require the key to be a whole word,
+        //    not just a prefix fragment - avoids "a" matching "ali".
+        val reverseMatches = safeKeys.filter { key ->
+            nameLower.startsWith(key) &&
+                (nameLower.length == key.length || nameLower[key.length] == ' ')
+        }.sortedByDescending { it.length }
+        if (reverseMatches.isNotEmpty()) return contacts[reverseMatches.first()]
+
+        // 4. Whole-word containment only (e.g. "message zaid friend" contains word "zaid").
+        //    Never a raw substring check - that's what let "a" match "Zain Rauf" before.
+        val nameWords = nameLower.split(" ")
+        val wholeWordMatches = safeKeys.filter { key ->
+            val keyWords = key.split(" ")
+            keyWords.any { it in nameWords } || nameWords.any { it == key }
+        }.sortedBy { it.length }
+        if (wholeWordMatches.isNotEmpty()) return contacts[wholeWordMatches.first()]
+
+        // No confident match - better to say "not found" than message the wrong person.
+        return null
     }
 
     /**
