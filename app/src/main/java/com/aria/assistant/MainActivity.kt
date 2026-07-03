@@ -207,6 +207,15 @@ class MainActivity : AppCompatActivity() {
     private var lastAmbiguousMatches: List<ContactResolver.Match> = emptyList()
 
     private fun handleWhatsAppRequest(contact: String, message: String) {
+        // 1. User-added contacts (Manage Contacts screen) always win - most trustworthy source.
+        val userAddedPhone = DeviceActions.getUserAddedNumber(this, contact)
+        if (userAddedPhone != null) {
+            DeviceActions.sendWhatsAppMessage(this, userAddedPhone, message)
+            log("Sending to $contact (saved in Manage Contacts) - $userAddedPhone")
+            return
+        }
+
+        // 2. Real phone contacts.
         val realMatches = ContactResolver.findContacts(this, contact)
         when {
             realMatches.size == 1 -> {

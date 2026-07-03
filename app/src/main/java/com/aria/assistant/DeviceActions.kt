@@ -39,6 +39,12 @@ object DeviceActions {
         am.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, AudioManager.FLAG_SHOW_UI)
     }
 
+    /** Checks ONLY the user-added contacts (Manage Contacts screen) - used to give them top priority. */
+    fun getUserAddedNumber(context: Context, name: String): String? {
+        val userContacts = ContactsStore.getAll(context)
+        return matchContact(userContacts, name)
+    }
+
     /**
      * Looks up a phone number by name. Checks user-added contacts (ContactsStore) first,
      * falling back to the old bundled assets/contacts.json for anything not yet migrated.
