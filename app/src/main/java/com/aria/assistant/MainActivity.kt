@@ -1,6 +1,7 @@
 package com.aria.assistant
 
 import android.Manifest
+import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
@@ -11,19 +12,20 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.speech.RecognizerIntent
-import android.speech.tts.TextToSpeech
+import android.view.View
+import android.widget.EditText
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.aria.assistant.databinding.ActivityMainBinding
+import java.util.Calendar
 import java.util.Locale
 import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
-    private lateinit var tts: TextToSpeech
 
     private val speechLauncher = registerForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
@@ -46,11 +48,7 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        tts = TextToSpeech(this) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                tts.language = Locale.US
-            }
-        }
+        VoiceSpeaker.init(this)
 
         requestNeededPermissions()
         requestBatteryOptimizationExemption()
@@ -98,6 +96,44 @@ class MainActivity : AppCompatActivity() {
         binding.btnMic.setOnClickListener {
             launchSpeechRecognizer()
         }
+
+        askForNameIfNeeded()
+    }
+
+    /** First-launch only: ask what to call the user, so JANI can personalize "Sir <Name>". */
+    private fun askForNameIfNeeded() {
+        if (UserPrefs.hasName(this)) {
+            greetOnStartup()
+            return
+        }
+        val input = EditText(this).apply { hint = "Your name (optional)" }
+        AlertDialog.Builder(this)
+            .setTitle("What should JANI call you?")
+            .setView(input)
+            .setCancelable(false)
+            .setPositiveButton("Save") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isNotBlank()) UserPrefs.setName(this, name)
+                greetOnStartup()
+            }
+            .setNegativeButton("Skip") { _, _ -> greetOnStartup() }
+            .show()
+    }
+
+    /** Time-aware greeting spoken/logged the moment the app opens - no AI call needed. */
+    private fun greetOnStartup() {
+        val name = UserPrefs.getName(this)
+        val addressTerm = if (name != null) "Sir $name" else "Sir"
+        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        val greeting = when {
+            hour < 5 -> "You're up late, $addressTerm. I'm here whenever you need me."
+            hour < 12 -> "Good morning, $addressTerm! How can I help you today?"
+            hour < 17 -> "Good afternoon, $addressTerm! What can I do for you?"
+            hour < 21 -> "Good evening, $addressTerm! I'm here for you."
+            else -> "It's getting late, $addressTerm - I'm still here if you need anything."
+        }
+        log("ARIA: $greeting")
+        speak(greeting)
     }
 
     private fun requestNeededPermissions() {
@@ -145,6 +181,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun addressTerm(): String {
+        val name = UserPrefs.getName(this)
+        return if (name != null) "Sir $name" else "Sir"
+    }
+
     private fun handleCommand(text: String) {
         log("You: $text")
 
@@ -156,14 +197,16 @@ class MainActivity : AppCompatActivity() {
                 reply in listOf("yes", "y", "confirm", "send", "ok", "okay", "yeah", "yep") -> {
                     pendingConfirmSend = null
                     DeviceActions.sendWhatsAppMessage(this, pendingConfirm.phone, pendingConfirm.message)
-                    log("ARIA: Sending to ${pendingConfirm.displayName} (${pendingConfirm.phone})")
-                    speak("Sending now.")
+                    val msg = "Sending it now, ${addressTerm()}. Anything else?"
+                    log("ARIA: $msg")
+                    speak(msg)
                     return
                 }
                 reply in listOf("no", "n", "cancel", "stop", "don't", "dont") -> {
                     pendingConfirmSend = null
-                    log("ARIA: Cancelled.")
-                    speak("Okay, cancelled.")
+                    val msg = "Okay, cancelled, ${addressTerm()}. Just let me know if you need anything else."
+                    log("ARIA: $msg")
+                    speak(msg)
                     return
                 }
                 else -> {
@@ -189,11 +232,19 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        binding.thinkingIndicator.visibility = View.VISIBLE
+        val userName = UserPrefs.getName(this)
+
         thread {
-            val result = CommandBrain.processWithAI(text)
+            val result = CommandBrain.processWithAI(text, userName)
             runOnUiThread {
-                log("ARIA: ${result.response}")
-                speak(result.response)
+                binding.thinkingIndicator.visibility = View.GONE
+                // For WhatsApp sends specifically, skip the AI's own "sending now!" filler line -
+                // it contradicts the confirm-before-send prompt that dispatch() is about to show.
+                if (result.command != "whatsapp") {
+                    log("ARIA: ${result.response}")
+                    speak(result.response)
+                }
                 dispatch(result)
             }
         }
@@ -206,7 +257,7 @@ class MainActivity : AppCompatActivity() {
             "battery" -> {
                 val pct = DeviceActions.getBatteryPercentage(this)
                 log("Battery: $pct%")
-                speak("Battery is at $pct percent")
+                speak("Battery is at $pct percent, ${addressTerm()}.")
             }
             "volume_up" -> DeviceActions.changeVolume(this, true)
             "volume_down" -> DeviceActions.changeVolume(this, false)
@@ -235,8 +286,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun askToConfirmSend(displayName: String, phone: String, message: String) {
         pendingConfirmSend = PendingSend(displayName, phone, message)
-        log("ARIA: Send '$message' to $displayName ($phone)? Reply yes or no.")
-        speak("Send '$message' to $displayName? Say yes or no.")
+        val msg = "Send '$message' to $displayName, ${addressTerm()}? Say yes or no."
+        log("ARIA: $msg")
+        speak(msg)
     }
 
     private fun handleWhatsAppRequest(contact: String, message: String) {
@@ -261,7 +313,7 @@ class MainActivity : AppCompatActivity() {
                 val options = realMatches.mapIndexed { i, m -> "${i + 1}) ${m.displayName} - ${m.phoneNumber}" }
                     .joinToString("\n")
                 log("Multiple contacts named '$contact':\n$options\nReply with the number.")
-                speak("I found more than one contact named $contact. Check the screen and tell me which number.")
+                speak("I found more than one contact named $contact, ${addressTerm()}. Check the screen and tell me which number.")
             }
             else -> {
                 // Not found in real contacts - try the legacy JSON list as a fallback
@@ -271,22 +323,17 @@ class MainActivity : AppCompatActivity() {
                     askToConfirmSend(contact, legacyPhone, message)
                 } else {
                     log("No contact found for '$contact'")
-                    speak("I couldn't find a contact named $contact. You can add them in Manage Contacts.")
+                    speak("I couldn't find a contact named $contact, ${addressTerm()}. You can add them in Manage Contacts.")
                 }
             }
         }
     }
 
     private fun speak(text: String) {
-        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+        VoiceSpeaker.speak(this, text)
     }
 
     private fun log(message: String) {
         binding.logText.append("\n$message")
-    }
-
-    override fun onDestroy() {
-        tts.shutdown()
-        super.onDestroy()
     }
 }

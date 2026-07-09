@@ -16,6 +16,15 @@ android {
         // or a local.properties value — never hardcode it here.
         def geminiKey = project.findProperty('GEMINI_API_KEY') ?: System.getenv('GEMINI_API_KEY') ?: ""
         buildConfigField "String", "GEMINI_API_KEY", "\"${geminiKey}\""
+
+        def groqKey = project.findProperty('GROQ_API_KEY') ?: System.getenv('GROQ_API_KEY') ?: ""
+        buildConfigField "String", "GROQ_API_KEY", "\"${groqKey}\""
+
+        def azureKey = project.findProperty('AZURE_SPEECH_KEY') ?: System.getenv('AZURE_SPEECH_KEY') ?: ""
+        buildConfigField "String", "AZURE_SPEECH_KEY", "\"${azureKey}\""
+
+        def azureRegion = project.findProperty('AZURE_SPEECH_REGION') ?: System.getenv('AZURE_SPEECH_REGION') ?: ""
+        buildConfigField "String", "AZURE_SPEECH_REGION", "\"${azureRegion}\""
     }
 
     buildTypes {
