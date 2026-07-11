@@ -4,17 +4,18 @@ import android.content.Context
 import android.media.MediaPlayer
 import android.speech.tts.TextToSpeech
 import android.util.Log
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
 import kotlin.concurrent.thread
 
 /**
- * Speaks text using Azure's natural voices.
- * Optimized for a "sweet, light girl" persona using ur-IN-GulNeural (softer than Uzma)
- * and SSML pitch/rate tuning to achieve the desired persona for free.
+ * Speaks text using Google Cloud TTS Wavenet voices.
+ * Wavenet-A is a high-quality, sweet female voice specifically for Urdu (Pakistan).
  */
 object VoiceSpeaker {
     private const val TAG = "VoiceSpeaker"
@@ -32,58 +33,56 @@ object VoiceSpeaker {
     }
 
     fun speak(context: Context, text: String) {
-        val key = BuildConfig.AZURE_SPEECH_KEY
-        val region = BuildConfig.AZURE_SPEECH_REGION
-        if (key.isBlank() || region.isBlank()) {
-            Log.w(TAG, "Azure keys missing, using Android fallback")
+        val apiKey = BuildConfig.GOOGLE_API_KEY // Ensure you add this to your GitHub Secrets
+        if (apiKey.isBlank()) {
+            Log.w(TAG, "Google API key missing, using Android fallback")
             speakWithAndroidFallback(text)
             return
         }
 
         thread {
             try {
-                speakWithAzure(context, text, key, region)
+                speakWithGoogle(context, text, apiKey)
             } catch (e: Exception) {
-                Log.e(TAG, "Azure TTS failed, falling back to Android TTS", e)
+                Log.e(TAG, "Google TTS failed, falling back to Android TTS", e)
                 speakWithAndroidFallback(text)
             }
         }
     }
 
-    private fun speakWithAzure(context: Context, text: String, key: String, region: String) {
-        // We use ur-IN-GulNeural because it's naturally softer/sweeter than ur-PK-Uzma.
-        // We then apply SSML to increase pitch and rate to make it sound younger and lighter.
-        val escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        
-        val ssml = """
-            <speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='ur-PK'>
-                <voice name='ur-IN-GulNeural'>
-                    <prosody pitch='+12%' rate='+8%' contour='(0%, +15Hz) (100%, -5Hz)'>
-                        $escaped
-                    </prosody>
-                </voice>
-            </speak>
-        """.trimIndent()
-
-        val url = URL("https://$region.tts.speech.microsoft.com/cognitiveservices/v1")
+    private fun speakWithGoogle(context: Context, text: String, apiKey: String) {
+        val url = URL("https://texttospeech.googleapis.com/v1/text:synthesize?key=${'$'}apiKey")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
-        conn.setRequestProperty("Ocp-Apim-Subscription-Key", key)
-        conn.setRequestProperty("Content-Type", "application/ssml+xml")
-        conn.setRequestProperty("X-Microsoft-OutputFormat", "audio-16khz-64kbitrate-mono-mp3")
-        conn.setRequestProperty("User-Agent", "ARIA")
+        conn.setRequestProperty("Content-Type", "application/json")
         conn.doOutput = true
-        conn.outputStream.use { it.write(ssml.toByteArray(Charsets.UTF_8)) }
+
+        val body = JSONObject().apply {
+            put("input", JSONObject().apply { put("text", text) })
+            put("voice", JSONObject().apply {
+                put("languageCode", "ur-PK")
+                put("name", "ur-PK-Wavenet-A")
+            })
+            put("audioConfig", JSONObject().apply {
+                put("audioEncoding", "MP3")
+                put("pitch", 2.0) // Slight pitch increase for sweetness
+                put("speakingRate", 1.05)
+            })
+        }
+
+        OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
 
         if (conn.responseCode != 200) {
-            val errorBody = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
-            throw Exception("Azure TTS error ${conn.responseCode}: $errorBody")
+            val error = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+            throw Exception("Google TTS error ${conn.responseCode}: ${'$'}error")
         }
 
+        val response = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+        val audioContent = response.getString("audioContent")
+        val audioBytes = android.util.Base64.decode(audioContent, android.util.Base64.DEFAULT)
+
         val audioFile = File(context.cacheDir, "aria_speech.mp3")
-        conn.inputStream.use { input ->
-            FileOutputStream(audioFile).use { output -> input.copyTo(output) }
-        }
+        FileOutputStream(audioFile).use { it.write(audioBytes) }
 
         mediaPlayer?.release()
         mediaPlayer = MediaPlayer().apply {
