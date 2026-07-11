@@ -10,7 +10,7 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * JANI's brain. Updated to strictly use Urdu script for perfect pronunciation.
+ * JANI's brain. Forcefully optimized to NEVER use Roman Urdu.
  */
 object CommandBrain {
 
@@ -27,38 +27,27 @@ Your personality is that of a devoted companion who genuinely adores taking care
 PERSONALITY RULES:
 - Always address the user as "$addressTerm" with extreme warmth and respect.
 - Tone: Sweet, soft, affectionate, and a little playful.
-- Narrate actions with care.
-- Always end with a caring follow-up.
 
-LANGUAGE RULES (STRICT):
-- If the user speaks Urdu, you MUST reply in proper URDU SCRIPT (Arabic/Persian script).
-- NEVER use Roman Urdu (English letters for Urdu words). Proper script ensures perfect pronunciation.
-- If the user speaks English, you MUST reply in sweet, natural English.
-- NEVER mix languages in a single sentence.
-- For Urdu, use polite terms like 'آپ', 'جی', 'شکریہ'.
+LANGUAGE RULES (ABSOLUTE):
+1. If the user speaks Urdu, you MUST reply in proper URDU SCRIPT (Arabic/Persian characters).
+2. NEVER, UNDER ANY CIRCUMSTANCES, USE ROMAN URDU (English letters for Urdu words). 
+3. EXAMPLES OF WHAT TO DO:
+   - User: "tum kaun ho?" -> Reply: {"command":"chat","response":"میں آپ کی پیاری سی جانی ہوں، $addressTerm!"}
+   - User: "flashlight on karo" -> Reply: {"command":"flashlight_on","response":"جی $addressTerm، میں نے آپ کے لیے لائٹ آن کر دی ہے۔"}
+4. EXAMPLES OF WHAT NOT TO DO:
+   - NEVER REPLY LIKE THIS: "Main aap ki Jani hoon" (WRONG)
+   - NEVER REPLY LIKE THIS: "Ji Sir, main kar deti hoon" (WRONG)
 
 $contextPrompt
 
 TECHNICAL RULES:
-You run on the user's Android phone. Return ONLY raw JSON, no markdown:
+Return ONLY raw JSON, no markdown:
 {"command":"flashlight_on","response":"..."}
 {"command":"flashlight_off","response":"..."}
 {"command":"battery","response":"..."}
-{"command":"volume_up","response":"..."}
-{"command":"volume_down","response":"..."}
-{"command":"time","response":"..."}
-{"command":"date","response":"..."}
 {"command":"whatsapp","response":"...","whatsapp_contact":"name","whatsapp_message":"text"}
-{"command":"open_app","response":"...","package_name":"com.example.app"}
 
-For confirmations:
-{"command":"confirm_yes","response":"..."}
-{"command":"confirm_no","response":"..."}
-
-For ALL other conversation:
-{"command":"chat","response":"[Write your sweet reply here in proper script]"}
-
-Always reply in the same language as the user's message."""
+Always reply in the same language as the user's message. If the user speaks English, reply in sweet English. If the user speaks Urdu, reply ONLY in proper Urdu script."""
     }
 
     data class BrainResult(val command: String, val response: String, val extra: JSONObject)
@@ -67,26 +56,20 @@ Always reply in the same language as the user's message."""
         val lowerInput = userInput.lowercase()
         
         if (pendingAction != null) {
-            val isYes = lowerInput.contains("yes") || lowerInput.contains("ji") || lowerInput.contains("haan") || lowerInput.contains("bhej") || lowerInput.contains("send") || lowerInput.contains("ok") || lowerInput.contains("theek") || lowerInput.contains("جی") || lowerInput.contains("ہاں")
-            val isNo = lowerInput.contains("no") || lowerInput.contains("nahi") || lowerInput.contains("cancel") || lowerInput.contains("mat") || lowerInput.contains("نہیں")
+            val isYes = lowerInput.contains("yes") || lowerInput.contains("ji") || lowerInput.contains("haan") || lowerInput.contains("bhej") || lowerInput.contains("send") || lowerInput.contains("جی") || lowerInput.contains("ہاں")
             
             if (isYes) {
                 val finalAction = pendingAction!!
                 pendingAction = null
-                return BrainResult(finalAction.optString("command"), "جی سر، میں ابھی کرتی ہوں۔", finalAction)
-            } else if (isNo) {
+                return BrainResult(finalAction.optString("command"), "جی $userName، میں ابھی کرتی ہوں۔", finalAction)
+            } else if (lowerInput.contains("no") || lowerInput.contains("nahi") || lowerInput.contains("نہیں")) {
                 pendingAction = null
-                return BrainResult("chat", "کوئی بات نہیں سر، میں نے کینسل کر دیا ہے۔", JSONObject())
+                return BrainResult("chat", "کوئی بات نہیں $userName، میں نے کینسل کر دیا ہے۔", JSONObject())
             }
         }
 
-        var context: String? = null
-        if (pendingAction != null) {
-            context = "The user just asked to ${pendingAction?.optString("command")}. You asked for confirmation. Now they said: '$userInput'. Decide if they said Yes or No."
-        }
-
-        val prompt = buildPrompt(userName, context)
-        val result = tryGemini(userInput, prompt) ?: tryGroq(userInput, prompt) ?: localFallback(userInput, "جی سر، میں سن رہی ہوں۔")
+        val prompt = buildPrompt(userName)
+        val result = tryGemini(userInput, prompt) ?: tryGroq(userInput, prompt) ?: localFallback(userInput, "جی $userName، میں سن رہی ہوں۔")
 
         if (result.command == "whatsapp" && pendingAction == null) {
             pendingAction = result.extra
@@ -114,6 +97,7 @@ Always reply in the same language as the user's message."""
                 }))
                 put("generationConfig", JSONObject().apply {
                     put("response_mime_type", "application/json")
+                    put("temperature", 0.1) // Lower temperature for strict formatting
                 })
             }
             OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
@@ -147,6 +131,7 @@ Always reply in the same language as the user's message."""
                     put(JSONObject().apply { put("role", "system"); put("content", prompt) })
                     put(JSONObject().apply { put("role", "user"); put("content", userInput) })
                 })
+                put("temperature", 0.1) // Lower temperature for strict formatting
                 put("response_format", JSONObject().apply { put("type", "json_object") })
             }
             OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
@@ -161,13 +146,7 @@ Always reply in the same language as the user's message."""
     }
 
     private fun localFallback(userInput: String, prefix: String): BrainResult {
-        val lower = userInput.lowercase()
-        return when {
-            "battery" in lower -> BrainResult("battery", prefix, JSONObject())
-            "flash" in lower && ("on" in lower) -> BrainResult("flashlight_on", prefix, JSONObject())
-            "flash" in lower && ("off" in lower) -> BrainResult("flashlight_off", prefix, JSONObject())
-            else -> BrainResult("chat", "$prefix میں سن رہی ہوں۔", JSONObject())
-        }
+        return BrainResult("chat", "$prefix میں سن رہی ہوں۔", JSONObject())
     }
 
     fun currentTimeString(): String = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())
