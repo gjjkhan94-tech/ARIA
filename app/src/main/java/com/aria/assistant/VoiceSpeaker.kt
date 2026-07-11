@@ -12,9 +12,9 @@ import java.util.Locale
 import kotlin.concurrent.thread
 
 /**
- * Speaks text using Azure's natural ur-PK-UzmaNeural voice (handles Urdu/English
- * code-switching gracefully). Falls back to Android's built-in TTS automatically
- * if no Azure key is configured or the network call fails, so ARIA never goes silent.
+ * Speaks text using Azure's natural voices.
+ * Optimized for a "sweet, light girl" persona using ur-IN-GulNeural (softer than Uzma)
+ * and SSML pitch/rate tuning to achieve the desired persona for free.
  */
 object VoiceSpeaker {
     private const val TAG = "VoiceSpeaker"
@@ -35,6 +35,7 @@ object VoiceSpeaker {
         val key = BuildConfig.AZURE_SPEECH_KEY
         val region = BuildConfig.AZURE_SPEECH_REGION
         if (key.isBlank() || region.isBlank()) {
+            Log.w(TAG, "Azure keys missing, using Android fallback")
             speakWithAndroidFallback(text)
             return
         }
@@ -50,11 +51,16 @@ object VoiceSpeaker {
     }
 
     private fun speakWithAzure(context: Context, text: String, key: String, region: String) {
+        // We use ur-IN-GulNeural because it's naturally softer/sweeter than ur-PK-Uzma.
+        // We then apply SSML to increase pitch and rate to make it sound younger and lighter.
         val escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        
         val ssml = """
-            <speak version='1.0' xml:lang='ur-PK'>
-                <voice name='ur-PK-UzmaNeural'>
-                    <prosody rate='0%' pitch='0%'>$escaped</prosody>
+            <speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='ur-PK'>
+                <voice name='ur-IN-GulNeural'>
+                    <prosody pitch='+12%' rate='+8%' contour='(0%, +15Hz) (100%, -5Hz)'>
+                        $escaped
+                    </prosody>
                 </voice>
             </speak>
         """.trimIndent()
@@ -70,7 +76,8 @@ object VoiceSpeaker {
         conn.outputStream.use { it.write(ssml.toByteArray(Charsets.UTF_8)) }
 
         if (conn.responseCode != 200) {
-            throw Exception("Azure TTS error ${conn.responseCode}")
+            val errorBody = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+            throw Exception("Azure TTS error ${conn.responseCode}: $errorBody")
         }
 
         val audioFile = File(context.cacheDir, "aria_speech.mp3")
