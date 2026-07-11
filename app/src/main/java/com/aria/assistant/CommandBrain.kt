@@ -10,13 +10,13 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * JANI's brain. Handles AI processing with state memory for context-aware commands.
+ * JANI's brain. Handles AI processing with a robust state machine for context-aware commands.
  */
 object CommandBrain {
 
     private const val TAG = "CommandBrain"
     
-    // Simple state memory to handle confirmations (Yes/No)
+    // Persistent state memory to handle confirmations
     private var pendingAction: JSONObject? = null
 
     private fun buildPrompt(userName: String?, stateContext: String? = null): String {
@@ -31,7 +31,6 @@ PERSONALITY RULES:
 - Tone: Sweet, soft, affectionate, and a little playful.
 - Narrate actions with care.
 - Always end with a caring follow-up.
-- Be empathetic.
 
 LANGUAGE RULES:
 - Urdu input = Urdu reply. English input = English reply.
@@ -51,7 +50,7 @@ You run on the user's Android phone. Return ONLY raw JSON, no markdown:
 {"command":"whatsapp","response":"...","whatsapp_contact":"name","whatsapp_message":"text"}
 {"command":"open_app","response":"...","package_name":"com.example.app"}
 
-For confirmations (if the user says Yes/Ji/Theek hai to a previous question):
+For confirmations (if the user says Yes/Ji/Theek hai/Bhej do to a previous question):
 {"command":"confirm_yes","response":"..."}
 {"command":"confirm_no","response":"..."}
 
@@ -64,23 +63,30 @@ Always reply in the same language as the user's message."""
     data class BrainResult(val command: String, val response: String, val extra: JSONObject)
 
     fun processWithAI(userInput: String, userName: String? = null): BrainResult {
+        val lowerInput = userInput.lowercase()
+        
+        // Quick check for simple confirmations to save tokens/time
+        if (pendingAction != null) {
+            val isYes = lowerInput.contains("yes") || lowerInput.contains("ji") || lowerInput.contains("haan") || lowerInput.contains("bhej") || lowerInput.contains("send") || lowerInput.contains("ok") || lowerInput.contains("theek")
+            val isNo = lowerInput.contains("no") || lowerInput.contains("nahi") || lowerInput.contains("cancel") || lowerInput.contains("mat")
+            
+            if (isYes) {
+                val finalAction = pendingAction!!
+                pendingAction = null
+                return BrainResult(finalAction.optString("command"), "As you wish, $userName. I'm doing that now!", finalAction)
+            } else if (isNo) {
+                pendingAction = null
+                return BrainResult("chat", "No problem at all, $userName. I've cancelled it. Anything else?", JSONObject())
+            }
+        }
+
         var context: String? = null
         if (pendingAction != null) {
-            context = "The user just asked to ${pendingAction?.optString("command")}. You asked for confirmation. Now they said: '$userInput'. If they said Yes/Ji, return 'confirm_yes'. If No, return 'confirm_no'."
+            context = "The user just asked to ${pendingAction?.optString("command")}. You asked for confirmation. Now they said: '$userInput'. Decide if they said Yes or No."
         }
 
         val prompt = buildPrompt(userName, context)
         val result = tryGemini(userInput, prompt) ?: tryGroq(userInput, prompt) ?: localFallback(userInput, "I'm here for you, $userName.")
-
-        // Handle confirmation logic
-        if (result.command == "confirm_yes" && pendingAction != null) {
-            val finalAction = pendingAction!!
-            pendingAction = null
-            return BrainResult(finalAction.optString("command"), "As you wish, $userName. I'm doing that now!", finalAction)
-        } else if (result.command == "confirm_no") {
-            pendingAction = null
-            return BrainResult("chat", "No problem at all, $userName. I've cancelled it.", JSONObject())
-        }
 
         // If the AI wants to do something that needs confirmation (like WhatsApp), save it
         if (result.command == "whatsapp" && pendingAction == null) {
@@ -95,7 +101,7 @@ Always reply in the same language as the user's message."""
         val apiKey = BuildConfig.GEMINI_API_KEY
         if (apiKey.isBlank()) return null
         return try {
-            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${'$'}apiKey")
+            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=$apiKey")
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
             conn.setRequestProperty("Content-Type", "application/json")
@@ -104,7 +110,7 @@ Always reply in the same language as the user's message."""
             val body = JSONObject().apply {
                 put("contents", org.json.JSONArray().put(JSONObject().apply {
                     put("parts", org.json.JSONArray().put(JSONObject().apply {
-                        put("text", "${'$'}prompt\n\nUser: ${'$'}userInput")
+                        put("text", "$prompt\n\nUser: $userInput")
                     }))
                 }))
                 put("generationConfig", JSONObject().apply {
@@ -133,7 +139,7 @@ Always reply in the same language as the user's message."""
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
             conn.setRequestProperty("Content-Type", "application/json")
-            conn.setRequestProperty("Authorization", "Bearer ${'$'}apiKey")
+            conn.setRequestProperty("Authorization", "Bearer $apiKey")
             conn.doOutput = true
             
             val body = JSONObject().apply {
@@ -161,7 +167,7 @@ Always reply in the same language as the user's message."""
             "battery" in lower -> BrainResult("battery", prefix, JSONObject())
             "flash" in lower && ("on" in lower) -> BrainResult("flashlight_on", prefix, JSONObject())
             "flash" in lower && ("off" in lower) -> BrainResult("flashlight_off", prefix, JSONObject())
-            else -> BrainResult("chat", "${'$'}prefix I'm here.", JSONObject())
+            else -> BrainResult("chat", "$prefix I'm listening.", JSONObject())
         }
     }
 

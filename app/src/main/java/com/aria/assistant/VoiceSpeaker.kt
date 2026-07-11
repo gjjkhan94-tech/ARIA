@@ -4,18 +4,17 @@ import android.content.Context
 import android.media.MediaPlayer
 import android.speech.tts.TextToSpeech
 import android.util.Log
-import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
-import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
+import java.util.UUID
 import kotlin.concurrent.thread
 
 /**
- * Speaks text using Google Cloud TTS Wavenet voices.
- * Wavenet-A is a high-quality, sweet female voice specifically for Urdu (Pakistan).
+ * Speaks text using a high-quality, free Neural TTS service (Edge-style).
+ * No API key or credit card required. Optimized for ur-PK (Urdu Pakistan).
  */
 object VoiceSpeaker {
     private const val TAG = "VoiceSpeaker"
@@ -33,56 +32,48 @@ object VoiceSpeaker {
     }
 
     fun speak(context: Context, text: String) {
-        val apiKey = BuildConfig.GOOGLE_API_KEY // Ensure you add this to your GitHub Secrets
-        if (apiKey.isBlank()) {
-            Log.w(TAG, "Google API key missing, using Android fallback")
-            speakWithAndroidFallback(text)
-            return
-        }
-
         thread {
             try {
-                speakWithGoogle(context, text, apiKey)
+                speakWithFreeNeural(context, text)
             } catch (e: Exception) {
-                Log.e(TAG, "Google TTS failed, falling back to Android TTS", e)
+                Log.e(TAG, "Neural TTS failed, falling back to Android TTS", e)
                 speakWithAndroidFallback(text)
             }
         }
     }
 
-    private fun speakWithGoogle(context: Context, text: String, apiKey: String) {
-        val url = URL("https://texttospeech.googleapis.com/v1/text:synthesize?key=${'$'}apiKey")
+    private fun speakWithFreeNeural(context: Context, text: String) {
+        // Using a free, high-quality neural endpoint for Urdu (Pakistan)
+        // We apply SSML-style tuning to make it sound sweet and light.
+        val requestId = UUID.randomUUID().toString().replace("-", "")
+        val voice = "ur-PK-UzmaNeural" // Note: This is the Neural version which sounds much better than standard
+        
+        // Constructing the request to a free high-quality neural engine
+        val url = URL("https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
-        conn.setRequestProperty("Content-Type", "application/json")
+        conn.setRequestProperty("Content-Type", "application/ssml+xml")
+        conn.setRequestProperty("X-Microsoft-OutputFormat", "audio-16khz-64kbitrate-mono-mp3")
         conn.doOutput = true
 
-        val body = JSONObject().apply {
-            put("input", JSONObject().apply { put("text", text) })
-            put("voice", JSONObject().apply {
-                put("languageCode", "ur-PK")
-                put("name", "ur-PK-Wavenet-A")
-            })
-            put("audioConfig", JSONObject().apply {
-                put("audioEncoding", "MP3")
-                put("pitch", 2.0) // Slight pitch increase for sweetness
-                put("speakingRate", 1.05)
-            })
-        }
+        val ssml = """
+            <speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='ur-PK'>
+                <voice name='$voice'>
+                    <prosody pitch='+15%' rate='+10%'>$text</prosody>
+                </voice>
+            </speak>
+        """.trimIndent()
 
-        OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
+        conn.outputStream.use { it.write(ssml.toByteArray(Charsets.UTF_8)) }
 
         if (conn.responseCode != 200) {
-            val error = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
-            throw Exception("Google TTS error ${conn.responseCode}: ${'$'}error")
+            throw Exception("Free TTS error ${conn.responseCode}")
         }
 
-        val response = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-        val audioContent = response.getString("audioContent")
-        val audioBytes = android.util.Base64.decode(audioContent, android.util.Base64.DEFAULT)
-
         val audioFile = File(context.cacheDir, "aria_speech.mp3")
-        FileOutputStream(audioFile).use { it.write(audioBytes) }
+        conn.inputStream.use { input ->
+            FileOutputStream(audioFile).use { output -> input.copyTo(output) }
+        }
 
         mediaPlayer?.release()
         mediaPlayer = MediaPlayer().apply {
